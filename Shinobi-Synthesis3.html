@@ -2040,4 +2040,549 @@
                             console.log('📨 加入者收到认证响应:', msg);
                             if (msg.type === 'auth_ok') {
                                 conn.off('data', authHandler);
-                                conn.on('data', function
+                                conn.on('data', function(data2) {
+                    try {
+                        var msg2 = JSON.parse(data2);
+                        handleRemoteAction(msg2);
+                    } catch (e) { console.error('解析错误:', e); }
+                });
+                lobby.gameStarted = true;
+                startRoleSelection('guest');
+            } else if (msg.type === 'auth_fail') {
+                conn.close();
+                alert('密码错误！');
+                lobby.roomIndex = -1;
+                updateLobbyUI();
+            }
+        } catch (e) { console.error('解析错误:', e); }
+    };
+    conn.on('data', authHandler);
+    setTimeout(function() {
+        if (!lobby.gameStarted) {
+            conn.close();
+            alert('连接超时');
+            lobby.roomIndex = -1;
+            updateLobbyUI();
+        }
+    }, 10000);
+});
+conn.on('close', function() { handleDisconnect(); });
+});
+peer.on('error', function(err) {
+alert('连接失败，请检查房间号/密码是否正确。');
+lobby.roomIndex = -1;
+updateLobbyUI();
+});
+}
+
+function handleDisconnect() {
+if (state.gameOver) return;
+const localPid = lobby.isHost ? 1 : 2;
+const winner = localPid === 1 ? 1 : 2;
+state.gameOver = true;
+log(`💀 对手断开连接，玩家${winner}获胜！`);
+showVictory(winner);
+render();
+updateLobbyUI('对手已断开');
+}
+
+// ---- 角色选择 ----
+function startRoleSelection(role) {
+document.getElementById('lobby-screen').style.display = 'none';
+document.getElementById('role-select-screen').style.display = 'block';
+document.getElementById('role-p1-title').textContent = role === 'host' ? '👹 玩家一 (房主)' : '👹 玩家一';
+document.getElementById('role-p2-title').textContent = role === 'guest' ? '🧙 玩家二 (加入者)' : '🧙 玩家二';
+selectedRoles = { p1: [], p2: [] };
+readyState = { p1: false, p2: false };
+renderRoleSelection();
+}
+
+function sendRoleSelection() {
+const key = localPlayerId === 1 ? 'p1' : 'p2';
+const roles = selectedRoles[key];
+sendAction({ type: 'roleSelect', playerId: localPlayerId, roles: roles });
+}
+
+function renderRoleSelection() {
+const p1List = document.getElementById('p1-role-list');
+const p2List = document.getElementById('p2-role-list');
+if (!p1List || !p2List) return;
+
+p1List.innerHTML = '';
+p2List.innerHTML = '';
+
+const isP1Local = (localPlayerId === 1);
+const isP2Local = (localPlayerId === 2);
+
+Object.values(ROLES).forEach(role => {
+const btn = document.createElement('button');
+const isSelected = selectedRoles.p1.includes(role.id);
+const isDisabled = !isSelected && selectedRoles.p1.length >= 2;
+const isLocal = isP1Local;
+btn.className = 'role-btn' + (isSelected ? ' selected' : '') + (isDisabled || !isLocal ? ' disabled' : '');
+btn.innerHTML = isLocal ?
+`<div class="role-name">${role.emoji} ${role.name} <span style="font-size:12px;color:#7a6a5a;">(${role.faction})</span></div>
+ <div class="role-skill">技能：${role.skillName} — <span>${role.skillDesc}</span></div>`
+:
+`<div class="role-name" style="color:#5a4a3a;">❓ 对手已选</div>`;
+btn.onclick = () => {
+if (isDisabled || !isLocal) return;
+const idx = selectedRoles.p1.indexOf(role.id);
+if (idx >= 0) { selectedRoles.p1.splice(idx, 1); } else if (selectedRoles.p1.length < 2) { selectedRoles.p1.push(role.id); }
+renderRoleSelection();
+updateConfirmButton();
+sendRoleSelection();
+};
+p1List.appendChild(btn);
+});
+
+Object.values(ROLES).forEach(role => {
+const btn = document.createElement('button');
+const isSelected = selectedRoles.p2.includes(role.id);
+const isDisabled = !isSelected && selectedRoles.p2.length >= 2;
+const isLocal = isP2Local;
+btn.className = 'role-btn' + (isSelected ? ' selected' : '') + (isDisabled || !isLocal ? ' disabled' : '');
+btn.innerHTML = isLocal ?
+`<div class="role-name">${role.emoji} ${role.name} <span style="font-size:12px;color:#7a6a5a;">(${role.faction})</span></div>
+ <div class="role-skill">技能：${role.skillName} — <span>${role.skillDesc}</span></div>`
+:
+`<div class="role-name" style="color:#5a4a3a;">❓ 对手已选</div>`;
+btn.onclick = () => {
+if (isDisabled || !isLocal) return;
+const idx = selectedRoles.p2.indexOf(role.id);
+if (idx >= 0) { selectedRoles.p2.splice(idx, 1); } else if (selectedRoles.p2.length < 2) { selectedRoles.p2.push(role.id); }
+renderRoleSelection();
+updateConfirmButton();
+sendRoleSelection();
+};
+p2List.appendChild(btn);
+});
+
+document.getElementById('p1-count').textContent = `已选 ${selectedRoles.p1.length} / 2`;
+document.getElementById('p2-count').textContent = `已选 ${selectedRoles.p2.length} / 2`;
+updateConfirmButton();
+updateReadyStatus();
+}
+
+function updateConfirmButton() {
+const btn = document.getElementById('role-confirm-btn');
+const p1Ok = selectedRoles.p1 && selectedRoles.p1.length === 2;
+const p2Ok = selectedRoles.p2 && selectedRoles.p2.length === 2;
+btn.disabled = !(p1Ok && p2Ok);
+if (!btn.disabled) btn.textContent = '⚔️ 确认出战 (双方已选好)';
+else btn.textContent = `⚔️ 请双方各选 2 名忍者 (${selectedRoles.p1?.length||0}/2, ${selectedRoles.p2?.length||0}/2)`;
+}
+
+function updateReadyStatus() {
+const statusEl = document.getElementById('ready-status');
+if (!statusEl) return;
+const myReady = localPlayerId === 1 ? readyState.p1 : readyState.p2;
+const oppReady = localPlayerId === 1 ? readyState.p2 : readyState.p1;
+if (state.gameOver) return;
+if (myReady && oppReady) {
+statusEl.innerHTML = '✅ 双方已确认，战斗即将开始...';
+} else if (myReady) {
+statusEl.innerHTML = '⏳ 你已确认，等待对手确认...';
+} else {
+statusEl.innerHTML = '📝 选好忍者后点击确认出战';
+}
+}
+
+function onConfirm() {
+if (selectedRoles.p1.length !== 2 || selectedRoles.p2.length !== 2) {
+alert('请双方各选 2 名忍者。');
+return;
+}
+if (localPlayerId === 1) readyState.p1 = true;
+else readyState.p2 = true;
+sendAction({ type: 'ready', playerId: localPlayerId });
+updateReadyStatus();
+checkBothReadyAndStart();
+}
+
+function checkBothReadyAndStart() {
+if (readyState.p1 && readyState.p2) {
+startGameOnline();
+}
+}
+
+function startGameOnline() {
+if (state.gameOver) return;
+if (lobby.isHost) {
+localPlayerId = 1;
+} else {
+localPlayerId = 2;
+}
+console.log('🔹 startGameOnline 设置 localPlayerId =', localPlayerId);
+
+const p1Selected = selectedRoles.p1 || [];
+const p2Selected = selectedRoles.p2 || [];
+if (p1Selected.length !== 2 || p2Selected.length !== 2) return;
+
+const p1Roles = p1Selected.map(rid => ({ roleId: rid, hp: 50, maxHp: 50, burn: 0, freeze: 0, shield: 0, chakra: 0, discarded: false, hand: [] }));
+const p2Roles = p2Selected.map(rid => ({ roleId: rid, hp: 50, maxHp: 50, burn: 0, freeze: 0, shield: 0, chakra: 0, discarded: false, hand: [] }));
+
+state.teams.p1.members = p1Roles;
+state.teams.p2.members = p2Roles;
+state.teams.p1.currentIndex = 0;
+state.teams.p2.currentIndex = 0;
+state.turn = 1;
+state.gameOver = false;
+state.discardMode = false;
+state.enhancePending = false;
+state.roundCounter = 1;
+state.totalDamage = { p1: 0, p2: 0 };
+state.totalHeal = { p1: 0, p2: 0 };
+state.totalBurnDamage = { p1: 0, p2: 0 };
+state.skillTriggered = {
+p1: { shadow_clone: false, sharingan: false, mangekyo: false, samehada: false, summon: false, reflect: false },
+p2: { shadow_clone: false, sharingan: false, mangekyo: false, samehada: false, summon: false, reflect: false }
+};
+state.lastPlayedCard = { p1: null, p2: null };
+state.aiMode = false;
+state.aiThinking = false;
+
+clearHandDOM(1);
+clearHandDOM(2);
+[1, 2].forEach(pid => {
+const member = getCurrentMember(pid);
+if (member) {
+member.hand = [];
+const initialCards = [
+{ name: '螺旋丸', element: '🌀', atk: 5, heal: 0, level: 'base' },
+{ name: '千杀水翔', element: '❄️', atk: 4, heal: 0, level: 'base' },
+{ name: '掌仙术', element: '🌿', atk: 0, heal: 6, level: 'base' },
+{ name: '千鸟', element: '⚡', atk: 8, heal: 0, level: 'base' }
+];
+initialCards.forEach(c => {
+member.hand.push(c);
+if (pid === localPlayerId) {
+addCardToDOM(pid, c);
+}
+});
+}
+});
+
+clearLog();
+log('🍥 2v2 忍界大战开始！');
+p1Selected.forEach(rid => { const r = ROLES[rid]; log(`👹 玩家一：${r.emoji} ${r.name}`); });
+p2Selected.forEach(rid => { const r = ROLES[rid]; log(`🧙 玩家二：${r.emoji} ${r.name}`); });
+log(`📊 第 1 回合开始`);
+
+document.getElementById('role-select-screen').style.display = 'none';
+document.getElementById('game-screen').style.display = 'block';
+document.getElementById('btn-back-home').classList.add('show');
+render();
+
+sendAction({ type: 'startGame' });
+}
+
+// ---- AI 模式（仅作占位） ----
+function startLocalGame(mode) {
+if (mode === 'ai') {
+alert('AI 模式暂未在此版本实现，请使用联机模式。');
+}
+}
+
+// ---- 渲染 ----
+function render() {
+[1, 2].forEach(pid => {
+const team = getTeam(pid);
+const alive = getAliveCount(team);
+const membersEl = pid === 1 ? p1Members : p2Members;
+const aliveEl = pid === 1 ? p1Alive : p2Alive;
+aliveEl.textContent = alive;
+
+membersEl.innerHTML = '';
+team.members.forEach((m, idx) => {
+const badge = document.createElement('span');
+badge.className = 'member-badge';
+if (m.hp <= 0) badge.classList.add('dead');
+if (idx === team.currentIndex && m.hp > 0) badge.classList.add('active');
+const role = ROLES[m.roleId];
+badge.innerHTML = `
+${role ? role.emoji : '❓'}
+${role ? role.name : '?'}
+<span class="hp-text">${m.hp}/${m.maxHp}</span>
+`;
+membersEl.appendChild(badge);
+});
+});
+
+const p1Member = getCurrentMember(1);
+const p2Member = getCurrentMember(2);
+const p1Role = p1Member ? ROLES[p1Member.roleId] : null;
+const p2Role = p2Member ? ROLES[p2Member.roleId] : null;
+if (p1CurrentRole) p1CurrentRole.textContent = p1Role ? `${p1Role.emoji} ${p1Role.name}` : '无';
+if (p2CurrentRole) p2CurrentRole.textContent = p2Role ? `${p2Role.emoji} ${p2Role.name}` : '无';
+if (p1TeamName) p1TeamName.textContent = '玩家一';
+if (p2TeamName) p2TeamName.textContent = '玩家二';
+
+if (p1HpEl) p1HpEl.textContent = p1Member ? p1Member.hp : 50;
+if (p2HpEl) p2HpEl.textContent = p2Member ? p2Member.hp : 50;
+if (p1HpBar) {
+const pct = p1Member ? (p1Member.hp / p1Member.maxHp) * 100 : 100;
+p1HpBar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+}
+if (p2HpBar) {
+const pct = p2Member ? (p2Member.hp / p2Member.maxHp) * 100 : 100;
+p2HpBar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+}
+
+const p1s = [];
+if (p1Member) {
+if (p1Member.burn > 0) p1s.push('🔥黑炎' + p1Member.burn);
+if (p1Member.freeze > 0) p1s.push('❄️冰牢' + p1Member.freeze);
+}
+if (p1Status) p1Status.textContent = p1s.length ? p1s.join(' ') : '无';
+const p2s = [];
+if (p2Member) {
+if (p2Member.burn > 0) p2s.push('🔥黑炎' + p2Member.burn);
+if (p2Member.freeze > 0) p2s.push('❄️冰牢' + p2Member.freeze);
+}
+if (p2Status) p2Status.textContent = p2s.length ? p2s.join(' ') : '无';
+
+if (p1ChakraEl) p1ChakraEl.textContent = p1Member ? p1Member.chakra : 0;
+if (p2ChakraEl) p2ChakraEl.textContent = p2Member ? p2Member.chakra : 0;
+
+const turnName = state.turn === 1 ? '玩家一' : '玩家二';
+if (turnIndicator) {
+turnIndicator.innerHTML = `
+<span>🎯 ${turnName}的回合</span>
+<span class="round-badge">📊 第 ${state.roundCounter} 回合</span>
+<span class="chakra-display">💠 查克拉 <span>${p1Member?p1Member.chakra:0}</span>/3</span>
+<span class="chakra-display">💠 查克拉 <span>${p2Member?p2Member.chakra:0}</span>/3</span>
+`;
+}
+
+if (isOnline) {
+if (p1Overlay) {
+if (localPlayerId === 1) {
+p1Overlay.classList.remove('show');
+p1Overlay.querySelector('.back-text') && (p1Overlay.querySelector('.back-text').textContent = '🃏 你的手牌');
+} else {
+p1Overlay.classList.add('show');
+p1Overlay.querySelector('.back-text') && (p1Overlay.querySelector('.back-text').textContent = '🃏 对手手牌');
+}
+}
+if (p2Overlay) {
+if (localPlayerId === 2) {
+p2Overlay.classList.remove('show');
+p2Overlay.querySelector('.back-text') && (p2Overlay.querySelector('.back-text').textContent = '🃏 你的手牌');
+} else {
+p2Overlay.classList.add('show');
+p2Overlay.querySelector('.back-text') && (p2Overlay.querySelector('.back-text').textContent = '🃏 对手手牌');
+}
+}
+}
+if (state.gameOver) {
+if (p1Overlay) p1Overlay.classList.remove('show');
+if (p2Overlay) p2Overlay.classList.remove('show');
+}
+
+const p1Area = $('p1-area');
+const p2Area = $('p2-area');
+if (p1Area) p1Area.classList.toggle('active-turn', state.turn === 1 && !state.gameOver);
+if (p2Area) p2Area.classList.toggle('active-turn', state.turn === 2 && !state.gameOver);
+
+const allCards = document.querySelectorAll('.card');
+allCards.forEach(c => {
+const pid = parseInt(c.dataset.player);
+const isActive = (pid === state.turn && !state.gameOver && !(state.aiMode && state.aiThinking));
+if (state.discardMode && isActive) {
+c.classList.add('discard-mode');
+} else {
+c.classList.remove('discard-mode');
+}
+if (isActive && !state.discardMode) {
+c.classList.remove('disabled', 'enemy-card');
+} else {
+c.classList.add('disabled');
+if (!isActive) c.classList.add('enemy-card');
+}
+});
+
+if (btnDiscard) {
+if (state.discardMode) {
+btnDiscard.textContent = '❌ 取消换牌';
+btnDiscard.classList.add('active');
+} else {
+btnDiscard.textContent = '🔄 换牌';
+btnDiscard.classList.remove('active');
+}
+}
+
+if (btnSubstitute) {
+const cur = getCurrentMember(state.turn);
+const frozen = cur && cur.freeze > 0;
+const chakra = cur && cur.chakra >= 1;
+btnSubstitute.disabled = !(frozen && chakra);
+btnSubstitute.textContent = `🪵 解除冻结 (1查克拉)${frozen?' ❄️':''}`;
+}
+
+let enhance = $('btn-enhance');
+if (!enhance) {
+const bar = document.querySelector('.action-bar');
+if (bar) {
+const b = document.createElement('button');
+b.id = 'btn-enhance';
+b.className = 'btn btn-warning';
+b.textContent = '💪 忍术强化 (2查克拉)';
+b.addEventListener('click', toggleEnhance);
+bar.appendChild(b);
+}
+} else {
+enhance.disabled = false;
+enhance.textContent = state.enhancePending ? '❌ 取消强化' : '💪 忍术强化 (2查克拉)';
+if (state.enhancePending) enhance.classList.add('active');
+else enhance.classList.remove('active');
+}
+}
+
+function toggleEnhance() {
+if (state.gameOver) { log('⛔ 游戏已结束'); return; }
+const member = getCurrentMember(state.turn);
+if (!member) { log('⛔ 没有可用角色'); return; }
+if (member.chakra < 2) {
+log('⛔ 查克拉不足 (需要2点)');
+return;
+}
+state.enhancePending = !state.enhancePending;
+if (state.enhancePending) {
+log('💠 忍术强化已激活！(+5效果)');
+if (state.discardMode) {
+state.discardMode = false;
+btnDiscard.textContent = '🔄 换牌';
+btnDiscard.classList.remove('active');
+}
+} else {
+log('💬 已取消强化');
+}
+render();
+}
+
+// ---- 初始化事件 ----
+document.addEventListener('DOMContentLoaded', function() {
+document.getElementById('btn-lobby').addEventListener('click', function() {
+document.getElementById('home-screen').classList.add('hidden');
+document.getElementById('lobby-screen').style.display = 'block';
+updateLobbyUI();
+});
+document.getElementById('btn-ai').addEventListener('click', function() {
+startLocalGame('ai');
+});
+document.getElementById('btn-rulebook-home').addEventListener('click', openRulebook);
+document.getElementById('btn-rulebook-game').addEventListener('click', openRulebook);
+document.getElementById('rulebook-close').addEventListener('click', closeRulebook);
+document.getElementById('rulebook-overlay').addEventListener('click', function(e) {
+if (e.target === this) closeRulebook();
+});
+
+document.getElementById('lobby-create').addEventListener('click', createRoom);
+document.getElementById('lobby-join').addEventListener('click', joinRoom);
+document.getElementById('lobby-back-home').addEventListener('click', function() {
+document.getElementById('home-screen').classList.remove('hidden');
+document.getElementById('lobby-screen').style.display = 'none';
+if (lobby.peer) { lobby.peer.destroy(); lobby.peer = null; }
+lobby.conn = null;
+lobby.roomIndex = -1;
+lobby.isHost = false;
+lobby.password = null;
+lobby.gameStarted = false;
+lobby.gameOver = false;
+isOnline = false;
+updateLobbyUI();
+});
+
+document.getElementById('role-confirm-btn').addEventListener('click', function() {
+if (isOnline) {
+onConfirm();
+} else {
+alert('请使用联机模式');
+}
+});
+
+btnSynth.addEventListener('click', synthesize);
+btnDiscard.addEventListener('click', function() {
+if (state.gameOver) { log('⛔ 游戏已结束'); return; }
+if (state.aiMode && state.aiThinking) { log('⏳ AI 正在思考...'); return; }
+const member = getCurrentMember(state.turn);
+if (!member) { log('⛔ 没有可用角色'); return; }
+if (member.discarded) { log('⛔ 本回合已换过牌'); return; }
+syncHandFromDOM(state.turn);
+if (member.hand.length === 0) { log('🃏 没有手牌可换'); return; }
+state.discardMode = !state.discardMode;
+state.enhancePending = false;
+if (state.discardMode) {
+btnDiscard.textContent = '❌ 取消换牌';
+btnDiscard.classList.add('active');
+log('💡 点击牌上的 ✕ 按钮换牌');
+} else {
+btnDiscard.textContent = '🔄 换牌';
+btnDiscard.classList.remove('active');
+log('💬 已取消换牌');
+}
+render();
+});
+btnEnd.addEventListener('click', function() {
+if (isOnline) {
+endTurn();
+} else {
+alert('请使用联机模式');
+}
+});
+btnRestart.addEventListener('click', function() {
+if (isOnline) {
+document.getElementById('btn-back-home').click();
+} else {
+alert('请使用联机模式');
+}
+});
+btnSubstitute.addEventListener('click', useSubstitute);
+
+document.getElementById('btn-back-home').addEventListener('click', function() {
+document.getElementById('home-screen').classList.remove('hidden');
+document.getElementById('btn-back-home').classList.remove('show');
+document.getElementById('role-select-screen').style.display = 'none';
+document.getElementById('victory-overlay').style.display = 'none';
+document.getElementById('game-screen').style.display = 'none';
+state.gameOver = true;
+clearLog();
+log('🍥 返回忍界卷轴');
+if (isOnline) {
+if (lobby.conn) { lobby.conn.close(); lobby.conn = null; }
+if (lobby.peer) { lobby.peer.destroy(); lobby.peer = null; }
+lobby.roomIndex = -1;
+lobby.isHost = false;
+lobby.password = null;
+lobby.gameStarted = false;
+lobby.gameOver = false;
+isOnline = false;
+updateLobbyUI();
+}
+render();
+});
+
+document.getElementById('victory-restart-btn').addEventListener('click', function() {
+if (isOnline) {
+document.getElementById('victory-overlay').style.display = 'none';
+document.getElementById('btn-back-home').click();
+} else {
+alert('请使用联机模式');
+}
+});
+
+document.addEventListener('keydown', function(e) {
+if (e.key === 'Escape') {
+const home = document.getElementById('home-screen');
+if (home.classList.contains('hidden')) {
+document.getElementById('btn-back-home').click();
+}
+}
+});
+
+render();
+});
+
+console.log('🟢 Shinobi Synthesis 同步版 加载完成');
+console.log('📌 房主统一处理，加入者全量同步，彻底杜绝状态不一致');
